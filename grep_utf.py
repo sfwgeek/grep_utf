@@ -1,4 +1,5 @@
 #! /usr/bin/env python2.7
+# -*- coding: utf-8 -*-
 # vim: et sw=4 ts=4:
 """
 DESCRIPTION:
@@ -41,7 +42,9 @@ __release_stage__ = 'General Availability (GA)' # Phase.
 # Standard library imports.
 import argparse
 import datetime
+import re
 import sys
+from pprint import pprint # DEBUG.
 
 
 # CONSTANTS.
@@ -51,6 +54,9 @@ PROGRAM_NAME = sys.argv[0]
 SYS_EXIT_CODE_SUCCESSFUL = 0
 SYS_EXIT_CODE_GENERAL_ERROR = 1
 SYS_EXIT_CODE_CMD_LINE_ERROR = 2
+
+IO_STREAM_ENCODING = 'latin1'
+#IO_STREAM_ENCODING = 'CP850' # Displays £ correctly in command prompt but not if pipe it to a file.
 
 
 # DEFINITIONS.
@@ -68,10 +74,18 @@ def getProgramArgumentParser():
     argParser = argparse.ArgumentParser(description=usage())
 
     # Mandatory parameters (though not set as required=True or can not use -V on own).
+    argParser.add_argument('pattern', nargs=1)
+    argParser.add_argument('files', nargs='+')
 
 
     # Optional parameters.
     optionalGrp = argParser.add_argument_group('extra optional arguments', 'These arguments are not mandatory.')
+    optionalGrp.add_argument('-e', '--regexp', action='store_true', dest='regexp',
+        help='Use regular expression in PATTERN.')
+    optionalGrp.add_argument('-i', '--ignore-case', action='store_true', dest='ignorecase',
+        help='Ignore case in input PATTERN.')
+
+
     optionalGrp.add_argument('-D', '--duration', action='store_true', dest='duration',
         help='Print to standard output the programs execution duration.')
     optionalGrp.add_argument('-V', '--version', action='store_true', dest='version',
@@ -112,6 +126,24 @@ def printProgramStatus(started, stream=sys.stdout):
     msg += 'Duration: {0} (days hh:mm:ss:ms)'.format(delta)
     print(msg, file=stream)
 
+def encodePrintMsg(srcMsg):
+    return srcMsg.encode(IO_STREAM_ENCODING)
+
+def printStderr(srcMsg):
+    """Prints to standard error IO stream in specific encoding."""
+    msg = encodePrintMsg(srcMsg)
+    print(msg, file=sys.stderr)
+
+def printStderrAndExit(srcMsg):
+    """Prints to standard error IO stream in specific encoding and exits program with error status."""
+    printStderr(srcMsg)
+    sys.exit(SYS_EXIT_CODE_CMD_LINE_ERROR)
+
+def printStdout(srcMsg):
+    """Prints to standard output IO stream in specific encoding."""
+    msg = encodePrintMsg(srcMsg)
+    print(msg)
+
 def main():
     """Program entry point."""
 
@@ -126,7 +158,22 @@ def main():
     if args.version:
         printVersionDetailsAndExit()
 
-    print('badger')
+    pprint(args)
+    patternStr = args.pattern[0]
+    fileArgs = args.files
+
+    # Compile regex pattern.
+    try:
+        compileFlags = 0 # None by default.
+        if args.ignorecase:
+            compileFlags |= re.IGNORECASE
+        patternRE = re.compile(patternStr, compileFlags)
+    except:
+        msg = 'Invalid regular expression for pattern: {0}!'.format(patternStr)
+        printStderr(msg)
+
+    print(patternStr)
+    print(fileArgs)
 
     if args.duration:
         printProgramStatus(started)
@@ -135,3 +182,7 @@ def main():
 # Program entry point.
 if __name__ == '__main__':
     main()
+
+    # TODO:
+    #   - Add thread pool for performance.
+    #   - Add consistent error handling for exceptions.
