@@ -1,4 +1,11 @@
 grep_utf
 ========
 
-Program to grep Unicode text files.
+Basic version of grep to search Unicode text files.
+
+
+Programming Language(s):
+    Python
+
+Interface:
+    Command Line Interface (CLI)
