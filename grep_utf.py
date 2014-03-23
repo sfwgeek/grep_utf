@@ -160,6 +160,11 @@ def printStdout(msg, encoding=IO_STREAM_ENCODING_DEFAULT, end=NEW_LINE):
     """Prints to standard output IO stream in specific encoding."""
     printStd(msg, encoding, sys.stdout, end=end)
 
+def printError(arg, msg):
+    """Print error to standard error IO stream."""
+    msg = '{0}: {1}: {2}'.format(PROGRAM_NAME, arg, msg)
+    printStderr(msg)
+
 def getFileEncoding(fileBOM):
     """Files can contain Byte Order MARK (BOM) at start of file, first 4 bytes.
     Return None if no matching BOM found."""
@@ -271,14 +276,22 @@ def walkFiles(patternRE, fileArgs, printFileNameOnly, printLineNumber, isRecursi
     fileArgs - list of file names, file paths, file globs, directory names or paths.
     """
 
-    filePaths = []
     for fileArg in fileArgs:
         if os.path.isfile(fileArg):
             filePath = os.path.abspath(fileArg)
             fileEncoding = getTextFileEncoding(filePath)
             grepFile(patternRE, filePath, fileEncoding, printFileNameOnly, printLineNumber)
-        elif isRecursive and os.path.isdir(fileArg):
-            walkFiles(patternRE, os.listdir(fileArg), printFileNameOnly, printLineNumber, isRecursive)
+        elif os.path.isdir(fileArg):
+            if isRecursive:
+                # Only grep directory child files if recursive argument set.
+                filePaths = []
+                fileNames = os.listdir(fileArg)
+                for fileName in fileNames:
+                    filePath = os.path.join(fileArg, fileName)
+                    filePaths.append(filePath)
+                walkFiles(patternRE, filePaths, printFileNameOnly, printLineNumber, isRecursive)
+            else:
+                printError(fileArg, 'Is a directory')
         else:
             # Is file argument a file glob?
             globFiles = glob.glob(fileArg)
@@ -286,8 +299,7 @@ def walkFiles(patternRE, fileArgs, printFileNameOnly, printLineNumber, isRecursi
                 walkFiles(patternRE, globFiles, printFileNameOnly, printLineNumber, isRecursive)
             else:
                 # Empty list means not file glob.
-                msg = 'Invalid file glob/path: {0}'.format(error)
-                printStderr(msg)
+                printError(fileArg, 'Invalid file glob/path')
 
 def main():
     """Program entry point."""

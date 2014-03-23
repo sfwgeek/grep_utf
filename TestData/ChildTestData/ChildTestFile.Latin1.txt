@@ -1,0 +1,5 @@
+Child data
+Some text
+in latin1 encoding
+on multiple lines
+with pound sign £.
