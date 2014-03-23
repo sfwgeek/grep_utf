@@ -67,6 +67,8 @@ SYS_EXIT_CODE_CMD_LINE_ERROR = 2
 IO_STREAM_ENCODING_DEFAULT = 'latin1'
 #IO_STREAM_ENCODING_DEFAULT = 'utf-8'
 
+NEW_LINE = '\n'
+
 
 # DEFINITIONS.
 def usage():
@@ -93,7 +95,14 @@ def getProgramArgumentParser():
     optionalGrp.add_argument('-e', '--regexp', action='store_true', dest='regexp',
         help='Use regular expression in PATTERN.')
     optionalGrp.add_argument('-i', '--ignore-case', action='store_true', dest='ignorecase',
-        help='Ignore case in input PATTERN.')
+        help='Ignore case distinctions in input PATTERN.')
+    optionalGrp.add_argument('-l', '--files-with-matches', action='store_true', dest='noline',
+        help='Suppress normal output; instead print the name of each input file from which output would normally have been printed.'
+            + '  The scanning will stop on the first match.')
+    optionalGrp.add_argument('-n', '--line-number', action='store_true', dest='linenum',
+        help='Prefix each line of output with the 1 based line number within its input file.')
+    optionalGrp.add_argument('-r', '--recursive', action='store_true', dest='recursive',
+        help='Read all files under each directory, recursively.')
 
     optionalGrp.add_argument('-D', '--duration', action='store_true', dest='duration',
         help='Print to standard output the programs execution duration.')
@@ -124,7 +133,6 @@ def getDaySuffix(day):
 def printProgramStatus(started):
     """Print program duration information."""
 
-    NEW_LINE = '\n'
     DATE_TIME_FORMAT = '%Y-%m-%d %H:%M:%S.%f (%a %d{0} %b %Y)'
     finished = datetime.datetime.now()
     delta = finished - started
@@ -139,16 +147,16 @@ def printStd(msg, encoding, stream, end):
     encodedMsg = msg.encode(encoding)
     print(encodedMsg, file=stream, end=end)
 
-def printStderr(msg, encoding=IO_STREAM_ENCODING_DEFAULT):
+def printStderr(msg, encoding=IO_STREAM_ENCODING_DEFAULT, end=NEW_LINE):
     """Prints to standard error IO stream in specific encoding."""
-    printStd(msg, encoding, sys.stderr)
+    printStd(msg, encoding, sys.stderr, end=end)
 
 def printStderrAndExit(msg, encoding=IO_STREAM_ENCODING_DEFAULT):
     """Prints to standard error IO stream in specific encoding and exits program with error status."""
     printStderr(msg, encoding)
     sys.exit(SYS_EXIT_CODE_CMD_LINE_ERROR)
 
-def printStdout(msg, encoding=IO_STREAM_ENCODING_DEFAULT, end='\n'):
+def printStdout(msg, encoding=IO_STREAM_ENCODING_DEFAULT, end=NEW_LINE):
     """Prints to standard output IO stream in specific encoding."""
     printStd(msg, encoding, sys.stdout, end=end)
 
@@ -233,7 +241,7 @@ def printUnicodeStdout(fmtStr, unicodeFmtVals):
     unicodeMsg += LINE_FEED
     printStdout(unicodeMsg, end='')
 
-def grepFile(patternRE, filePath, fileEncoding, printLineNumber, printFileNameOnly):
+def grepFile(patternRE, filePath, fileEncoding, printFileNameOnly, printLineNumber):
     """grep file.  Assumes text file and uses supplied encoding."""
 
     fileRelPath = os.path.relpath(filePath)
@@ -243,7 +251,7 @@ def grepFile(patternRE, filePath, fileEncoding, printLineNumber, printFileNameOn
                 if patternRE.search(line):
                     msg = fileRelPath
                     printStdout(msg)
-                    break # Only need to find one line cause printing only file name.
+                    break # Scanning will stop on first match (only printing file name).
         if printLineNumber:
             # Print file name, line number and line.
             lineCount = 0
@@ -257,7 +265,7 @@ def grepFile(patternRE, filePath, fileEncoding, printLineNumber, printFileNameOn
                 if patternRE.search(line):
                     printUnicodeStdout('{0}:{1}', (fileRelPath, line))
 
-def walkFiles(patternRE, fileArgs, isRecursive):
+def walkFiles(patternRE, fileArgs, printFileNameOnly, printLineNumber, isRecursive):
     """Iterate the supplied file arguments.
     patternRE - regular expression object to be used to search files.
     fileArgs - list of file names, file paths, file globs, directory names or paths.
@@ -268,14 +276,14 @@ def walkFiles(patternRE, fileArgs, isRecursive):
         if os.path.isfile(fileArg):
             filePath = os.path.abspath(fileArg)
             fileEncoding = getTextFileEncoding(filePath)
-            grepFile(patternRE, filePath, fileEncoding, False, False)
+            grepFile(patternRE, filePath, fileEncoding, printFileNameOnly, printLineNumber)
         elif isRecursive and os.path.isdir(fileArg):
-            walkFiles(patternRE, os.listdir(fileArg), isRecursive)
+            walkFiles(patternRE, os.listdir(fileArg), printFileNameOnly, printLineNumber, isRecursive)
         else:
             # Is file argument a file glob?
             globFiles = glob.glob(fileArg)
             if globFiles:
-                walkFiles(patternRE, globFiles, isRecursive)
+                walkFiles(patternRE, globFiles, printFileNameOnly, printLineNumber, isRecursive)
             else:
                 # Empty list means not file glob.
                 msg = 'Invalid file glob/path: {0}'.format(error)
@@ -298,17 +306,22 @@ def main():
     patternStr = args.pattern[0]
     fileArgs = args.files
 
-    # Compile regex pattern (perf reasons).
     try:
+        if not args.regexp:
+            # Escape pattern if not using regular expressions.
+            patternStr = re.escape(patternStr)
+
         compileFlags = 0 # None by default.
         if args.ignorecase:
             compileFlags |= re.IGNORECASE
+
+        # Compile regex pattern (perf reasons).
         patternRE = re.compile(patternStr, compileFlags)
     except:
-        msg = 'Invalid regular expression for pattern: {0}!'.format(patternStr)
-        printStderr(msg)
+        msg = 'Invalid regular expression for pattern: {0}'.format(patternStr)
+        printStderrAndExit(msg)
 
-    walkFiles(patternRE, fileArgs, False) # TODO: add recursive option!
+    walkFiles(patternRE, fileArgs, args.noline, args.linenum, args.recursive)
 
     if args.duration:
         printProgramStatus(started)
@@ -319,7 +332,7 @@ if __name__ == '__main__':
     main()
 
     # TODO:
+    #   - -V (--version) does not work because requirement for 2 arguments (pattern, files)!
     #   - Add thread pool for performance.
     #   - Add consistent error handling for exceptions.
     #   - Group printStd* functions into class.
-    #   - Add functionality to handle recursive directory traversal.
