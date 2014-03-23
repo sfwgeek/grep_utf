@@ -23,6 +23,10 @@ NOTES:
         http://google-styleguide.googlecode.com/svn/trunk/pyguide.html
     Docstring Conventions:
         http://www.python.org/dev/peps/pep-0257
+
+    # View files as binary.
+    od -cx <file> | less
+    od -ct x1 <file> | less # better alignment.
 """
 
 
@@ -33,18 +37,22 @@ from __future__ import print_function
 
 # VERSION.
 # http://en.wikipedia.org/wiki/Software_release_life_cycle
-__version__ = '2014.03.15.01' # Year.Month.Day.Build (YYYY.MM.DD.BB).
-__release_stage__ = 'General Availability (GA)' # Phase.
+__version__ = '2014.03.23.01' # Year.Month.Day.Build (YYYY.MM.DD.BB).
+__release_stage__ = 'Beta' # Phase.
 
 
 # MODULES.
 # http://google-styleguide.googlecode.com/svn/trunk/pyguide.html#Imports_formatting
 # Standard library imports.
 import argparse
+import codecs
 import datetime
+import glob
+import os
 import re
+import string
 import sys
-from pprint import pprint # DEBUG.
+#from pprint import pprint # DEBUG.
 
 
 # CONSTANTS.
@@ -55,8 +63,9 @@ SYS_EXIT_CODE_SUCCESSFUL = 0
 SYS_EXIT_CODE_GENERAL_ERROR = 1
 SYS_EXIT_CODE_CMD_LINE_ERROR = 2
 
-IO_STREAM_ENCODING = 'latin1'
-#IO_STREAM_ENCODING = 'CP850' # Displays £ correctly in command prompt but not if pipe it to a file.
+#IO_STREAM_ENCODING_DEFAULT = 'CP850' # Displays £ correctly in command prompt but not if redirect to a file.
+IO_STREAM_ENCODING_DEFAULT = 'latin1'
+#IO_STREAM_ENCODING_DEFAULT = 'utf-8'
 
 
 # DEFINITIONS.
@@ -74,9 +83,10 @@ def getProgramArgumentParser():
     argParser = argparse.ArgumentParser(description=usage())
 
     # Mandatory parameters (though not set as required=True or can not use -V on own).
-    argParser.add_argument('pattern', nargs=1)
-    argParser.add_argument('files', nargs='+')
-
+    argParser.add_argument('pattern', nargs=1,
+        help='Pattern used to search file lines for.')
+    argParser.add_argument('files', nargs='+',
+        help='File name/path or file glob')
 
     # Optional parameters.
     optionalGrp = argParser.add_argument_group('extra optional arguments', 'These arguments are not mandatory.')
@@ -84,7 +94,6 @@ def getProgramArgumentParser():
         help='Use regular expression in PATTERN.')
     optionalGrp.add_argument('-i', '--ignore-case', action='store_true', dest='ignorecase',
         help='Ignore case in input PATTERN.')
-
 
     optionalGrp.add_argument('-D', '--duration', action='store_true', dest='duration',
         help='Print to standard output the programs execution duration.')
@@ -102,7 +111,7 @@ NAME:
 VERSION:
     {1}
     {2}'''.format(PROGRAM_NAME, __version__, __release_stage__)
-    print(msg)
+    printStdout(msg)
     sys.exit(SYS_EXIT_CODE_SUCCESSFUL)
 
 def getDaySuffix(day):
@@ -112,7 +121,7 @@ def getDaySuffix(day):
         return 'th'
     return ['st', 'nd', 'rd'][day % 10 - 1]
 
-def printProgramStatus(started, stream=sys.stdout):
+def printProgramStatus(started):
     """Print program duration information."""
 
     NEW_LINE = '\n'
@@ -124,25 +133,181 @@ def printProgramStatus(started, stream=sys.stdout):
     dateTimeStr = finished.strftime(DATE_TIME_FORMAT.format(getDaySuffix(finished.day)))
     msg += 'Finished: {0}{1}'.format(dateTimeStr, NEW_LINE)
     msg += 'Duration: {0} (days hh:mm:ss:ms)'.format(delta)
-    print(msg, file=stream)
+    printStdout(msg)
 
-def encodePrintMsg(srcMsg):
-    return srcMsg.encode(IO_STREAM_ENCODING)
+def printStd(msg, encoding, stream, end):
+    encodedMsg = msg.encode(encoding)
+    print(encodedMsg, file=stream, end=end)
 
-def printStderr(srcMsg):
+def printStderr(msg, encoding=IO_STREAM_ENCODING_DEFAULT):
     """Prints to standard error IO stream in specific encoding."""
-    msg = encodePrintMsg(srcMsg)
-    print(msg, file=sys.stderr)
+    printStd(msg, encoding, sys.stderr)
 
-def printStderrAndExit(srcMsg):
+def printStderrAndExit(msg, encoding=IO_STREAM_ENCODING_DEFAULT):
     """Prints to standard error IO stream in specific encoding and exits program with error status."""
-    printStderr(srcMsg)
+    printStderr(msg, encoding)
     sys.exit(SYS_EXIT_CODE_CMD_LINE_ERROR)
 
-def printStdout(srcMsg):
+def printStdout(msg, encoding=IO_STREAM_ENCODING_DEFAULT, end='\n'):
     """Prints to standard output IO stream in specific encoding."""
-    msg = encodePrintMsg(srcMsg)
-    print(msg)
+    printStd(msg, encoding, sys.stdout, end=end)
+
+def validateFileArguments(fileArgs):
+    """Check file arguments are existing files (not directories etc) or valid file globs.
+    Valid file globs are resolved and file paths returned.
+    Print errors to Stderr and exit.
+    Returns file valid paths."""
+
+    errors = []
+    filePaths = []
+    for fileArg in fileArgs:
+        if os.path.isfile(fileArg):
+            filePath = os.path.abspath(fileArg)
+            filePaths.append(filePath)
+        elif os.path.isdir(fileArg):
+            errors.append(fileArg)
+        else:
+            # Is file argument a file glob?
+            globFiles = glob.glob(fileArg)
+            if globFiles:
+                for globFile in globFiles:
+                    filePath = os.path.abspath(globFile)
+                    filePaths.append(filePath)
+            else:
+                # Empty list means not file glob.
+                errors.append(fileArg)
+    if errors:
+        for error in errors:
+            msg = 'Invalid file glob/path: {0}'.format(error)
+            printStderr(msg)
+        sys.exit(SYS_EXIT_CODE_CMD_LINE_ERROR)
+    return filePaths
+
+def getFileEncoding(fileBOM):
+    """Files can contain Byte Order MARK (BOM) at start of file, first 4 bytes.
+    Return None if no matching BOM found."""
+
+    # TODO: perf - maybe change startswith() with slice comparison?
+    if (fileBOM.startswith(codecs.BOM_UTF32) or
+        fileBOM.startswith(codecs.BOM_UTF32_LE) or
+        fileBOM.startswith(codecs.BOM_UTF32_BE)):
+        return 'utf-32'
+    if (fileBOM.startswith(codecs.BOM_UTF16) or
+        fileBOM.startswith(codecs.BOM_UTF16_LE) or
+        fileBOM.startswith(codecs.BOM_UTF16_BE)):
+        return 'utf-16'
+    if fileBOM.startswith(codecs.BOM_UTF8):
+        return 'utf-8-sig' # Skips BOM.
+        #return 'utf-8' # Keeps BOM.
+
+    # No BOM found!
+    return None
+
+def getByteOrderMark(firstFileBlock):
+    """Return Byte Order Mark (BOM) from file first block."""
+    return firstFileBlock[:4]
+
+def getFileBlock(filePath, blockSize=512):
+    """Return file block for file."""
+    with open(filePath) as srcFO:
+        return srcFO.read(blockSize)
+
+def getTextFileEncoding(filePath):
+    """Return encoding of file if its a text file, otherwise None."""
+
+    # Assumes filePath is existing file.
+    IS_NOT_TEXT_FILE = None
+    DEFAULT_ENCODING = 'latin1'
+    #DEFAULT_ENCODING = 'ascii'
+    #DEFAULT_ENCODING = 'utf-8'
+
+    # Read a block of input/source file.
+    fileBlock = getFileBlock(filePath)
+    if not fileBlock:
+        # Skip empty files.
+        return IS_NOT_TEXT_FILE
+
+    fileBOM = getByteOrderMark(fileBlock)
+    fileEncoding = getFileEncoding(fileBOM)
+    if fileEncoding:
+        # File starts with recognised BOM so assume text file.
+        return fileEncoding
+
+    if '\0' in fileBlock:
+        # Binary file.
+        # Point to note, utf-16 files contain alot of '\0' (nulls).
+        return IS_NOT_TEXT_FILE
+
+    # Get the non-text characters (maps a character to itself then
+    # use the 'remove' option to get rid of the text characters.)
+    textChars = ''.join(map(chr, range(32, 127)) + list('\n\r\t\b'))
+    nullTrans = string.maketrans('', '')
+    transStr = fileBlock.translate(nullTrans, textChars)
+
+    # If more than 30% non-text characters, assume a binary file.
+    if (len(transStr) / len(fileBlock)) > 0.3:
+        # Binary file.
+        return IS_NOT_TEXT_FILE
+
+    # Passed all other tests, assume text file.
+    return DEFAULT_ENCODING
+
+def printUnicodeStdout(fmtStr, unicodeFmtVals):
+    """Format and print Unicode strings."""
+
+    NEW_LINE = u'\n'
+    unicodeMsg = unicode(fmtStr).format(*unicodeFmtVals)
+    if not unicodeMsg.endswith(NEW_LINE):
+        unicodeMsg += NEW_LINE
+    printStdout(unicodeMsg, end='')
+
+def grepFile(patternRE, filePath, fileEncoding, printLineNumber, printFileNameOnly):
+    """grep file.  Assumes text file and uses supplied encoding."""
+
+    fileRelPath = os.path.relpath(filePath)
+    with codecs.open(filePath, encoding=fileEncoding) as srcFO:
+        if printFileNameOnly:
+            for line in srcFO:
+                if patternRE.search(line):
+                    msg = fileRelPath
+                    printStdout(msg)
+                    break # Only need to find one line cause printing only file name.
+        if printLineNumber:
+            # Print file name, line number and line.
+            lineCount = 0
+            for line in srcFO:
+                lineCount += 1
+                if patternRE.search(line):
+                    printUnicodeStdout('{0}:{1}:{2}', (fileRelPath, lineCount, line))
+        else:
+            # Print file name and line.
+            for line in srcFO:
+                if patternRE.search(line):
+                    printUnicodeStdout('{0}:{1}', (fileRelPath, line))
+
+def walkFiles(patternRE, fileArgs, isRecursive):
+    """Iterate the supplied file arguments.
+    patternRE - regular expression object to be used to search files.
+    fileArgs - list of file names, file paths, file globs, directory names or paths.
+    """
+
+    filePaths = []
+    for fileArg in fileArgs:
+        if os.path.isfile(fileArg):
+            filePath = os.path.abspath(fileArg)
+            fileEncoding = getTextFileEncoding(filePath)
+            grepFile(patternRE, filePath, fileEncoding, False, False)
+        elif isRecursive and os.path.isdir(fileArg):
+            walkFiles(patternRE, os.listdir(fileArg), isRecursive)
+        else:
+            # Is file argument a file glob?
+            globFiles = glob.glob(fileArg)
+            if globFiles:
+                walkFiles(patternRE, globFiles, isRecursive)
+            else:
+                # Empty list means not file glob.
+                msg = 'Invalid file glob/path: {0}'.format(error)
+                printStderr(msg)
 
 def main():
     """Program entry point."""
@@ -158,11 +323,10 @@ def main():
     if args.version:
         printVersionDetailsAndExit()
 
-    pprint(args)
     patternStr = args.pattern[0]
     fileArgs = args.files
 
-    # Compile regex pattern.
+    # Compile regex pattern (perf reasons).
     try:
         compileFlags = 0 # None by default.
         if args.ignorecase:
@@ -172,8 +336,8 @@ def main():
         msg = 'Invalid regular expression for pattern: {0}!'.format(patternStr)
         printStderr(msg)
 
-    print(patternStr)
-    print(fileArgs)
+    #validFilePaths = validateFileArguments(fileArgs)
+    walkFiles(patternRE, fileArgs, False) # TODO: add recursive option!
 
     if args.duration:
         printProgramStatus(started)
@@ -184,5 +348,8 @@ if __name__ == '__main__':
     main()
 
     # TODO:
+    #   - Need to change validation from upfront to iterate files and validate then (performance reasons).
     #   - Add thread pool for performance.
     #   - Add consistent error handling for exceptions.
+    #   - Group printStd* functions into class.
+    #   - Add functionality to handle recursive directroy traversal.
