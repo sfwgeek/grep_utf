@@ -152,37 +152,6 @@ def printStdout(msg, encoding=IO_STREAM_ENCODING_DEFAULT, end='\n'):
     """Prints to standard output IO stream in specific encoding."""
     printStd(msg, encoding, sys.stdout, end=end)
 
-def validateFileArguments(fileArgs):
-    """Check file arguments are existing files (not directories etc) or valid file globs.
-    Valid file globs are resolved and file paths returned.
-    Print errors to Stderr and exit.
-    Returns file valid paths."""
-
-    errors = []
-    filePaths = []
-    for fileArg in fileArgs:
-        if os.path.isfile(fileArg):
-            filePath = os.path.abspath(fileArg)
-            filePaths.append(filePath)
-        elif os.path.isdir(fileArg):
-            errors.append(fileArg)
-        else:
-            # Is file argument a file glob?
-            globFiles = glob.glob(fileArg)
-            if globFiles:
-                for globFile in globFiles:
-                    filePath = os.path.abspath(globFile)
-                    filePaths.append(filePath)
-            else:
-                # Empty list means not file glob.
-                errors.append(fileArg)
-    if errors:
-        for error in errors:
-            msg = 'Invalid file glob/path: {0}'.format(error)
-            printStderr(msg)
-        sys.exit(SYS_EXIT_CODE_CMD_LINE_ERROR)
-    return filePaths
-
 def getFileEncoding(fileBOM):
     """Files can contain Byte Order MARK (BOM) at start of file, first 4 bytes.
     Return None if no matching BOM found."""
@@ -255,10 +224,13 @@ def getTextFileEncoding(filePath):
 def printUnicodeStdout(fmtStr, unicodeFmtVals):
     """Format and print Unicode strings."""
 
-    NEW_LINE = u'\n'
+    CARRIAGE_RETURN = u'\r'
+    LINE_FEED = u'\n' # Newline
     unicodeMsg = unicode(fmtStr).format(*unicodeFmtVals)
-    if not unicodeMsg.endswith(NEW_LINE):
-        unicodeMsg += NEW_LINE
+
+    # Stop extra carriage return (\r) appearing.
+    unicodeMsg = unicodeMsg.rstrip(CARRIAGE_RETURN + LINE_FEED)
+    unicodeMsg += LINE_FEED
     printStdout(unicodeMsg, end='')
 
 def grepFile(patternRE, filePath, fileEncoding, printLineNumber, printFileNameOnly):
@@ -336,7 +308,6 @@ def main():
         msg = 'Invalid regular expression for pattern: {0}!'.format(patternStr)
         printStderr(msg)
 
-    #validFilePaths = validateFileArguments(fileArgs)
     walkFiles(patternRE, fileArgs, False) # TODO: add recursive option!
 
     if args.duration:
@@ -348,8 +319,7 @@ if __name__ == '__main__':
     main()
 
     # TODO:
-    #   - Need to change validation from upfront to iterate files and validate then (performance reasons).
     #   - Add thread pool for performance.
     #   - Add consistent error handling for exceptions.
     #   - Group printStd* functions into class.
-    #   - Add functionality to handle recursive directroy traversal.
+    #   - Add functionality to handle recursive directory traversal.
